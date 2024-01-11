@@ -1,0 +1,80 @@
+---
+title: "EXST 7151 Midterm Project"
+author: "Dina Dinh"
+date: '2023-10-18'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+```
+
+Data Cleaning
+
+```{r}
+data <- read.csv("data_date.csv")
+unique_data <- data %>% distinct(Country, .keep_all = TRUE)
+aqi_2 <- unique_data[,c("Status","AQI_Value")]
+aqi <- aqi_2[,2]
+aqi <-  aqi[aqi <= 500]
+aqi_df <- data.frame(aqi)
+```
+
+We see that the variable AQI contains no missing values need the be addressed. There is a value greater than 500 which should be removed that's probably due to typing error since AQI only ranges from 0 to 500.
+
+Histogram of AQI
+
+```{r}
+hist_aqi <- ggplot(aqi_df, aes(x = aqi)) + geom_histogram(aes(y = ..count..),
+breaks = seq(0, 550, by = 25), colour = "black",
+fill = "pink") +
+geom_density(aes(y = ..count.. * 25), color = "blue", linewidth = 1) +
+scale_x_continuous(breaks = seq(0,
+550, by = 50)) + theme_classic()
+
+hist_aqi
+```
+
+Since the dataset can only take any positive values ranging from 0 to 500, the Gamma distribution seem the most plausible for this dataset. Also, the dataset was recorded over the span of about one year from July 21, 2022, to August 10, 2023.
+
+
+```{r}
+a = 5
+
+x <- seq(0, 50, by = 0.1) 
+
+curve(dgamma(x, shape = a, rate = a/70), col = "grey", lwd = 3, xlab = "X", ylab = "Density",
+      main = "Gamma Distribution", ylim = c(0, .08), xlim = c(0, 300))
+curve(dgamma(x, shape = sum(aqi) + 1, rate = 142), add = TRUE, col = "green", lwd = 5)
+curve(dgamma(x, shape = sum(aqi) + a, rate = 142 + a/70),add=T,col="red",lwd=3)
+legend(200,.08,c("Prior","Likelihood", "Posterior"),lty=1,lwd=4,col=c("grey","green","red"))
+
+```
+
+Summary Statistics of the Posterior Distribution
+```{r}
+mu_n <- ((sum(aqi))+a)/(142+(a/70))
+var_n <- (sum(aqi)+a)/((142+a/70)^2)
+ci_5 <- qgamma(0.05, shape = sum(aqi) + a, rate = 142 + a/70)
+ci_95 <- qgamma(0.95, shape = sum(aqi) + a, rate = 142 + a/70)
+
+mu <- (sum(aqi)+1)/(142)
+mu0 <- (a)/(a/70)
+```
+
+
+Predictive
+```{r}
+y =  seq(0, 500, by = 1) 
+z =dnbinom(y, size = a+sum(aqi), mu = (a+sum(aqi))/((142+(a/70))+142))
+df_z <- data.frame(z)
+barplot(z, names.arg = y, xlab = "AQI", ylab = "Probability", col = "skyblue", main = "Negative Binomial Distribution")
+```
+
+

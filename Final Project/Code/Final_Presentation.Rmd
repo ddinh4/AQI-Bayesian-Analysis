@@ -1,0 +1,517 @@
+---
+title: "Final Project Presentation - EXST 7151"
+author: "Dina Dinh"
+date: '2023-11-21'
+output: 
+  slidy_presentation:
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+## Describing the Dataset
+
+- This dataset contains the Air Quality Index of most countries around the world.
+
+- We sampled 142 countries and observed the AQI value of each country on July 21, 2022. Our objective is to estimate the mean AQI and variance per country. 
+
+- AQI can only take integer values from 0 to 500
+
+![Ranges for AQI](C:/Users/ddinh4/Documents/Fall 2023/EXST 7151/Midterm Project/AQI_range.png)
+
+## Establishing Prior Beliefs
+
+- According to “Air Quality from Space”, after the start of COVID-19 pandemic, air pollution has decreased significantly based on nitrogen dioxide (NO2) levels (1). 
+
+- Less travel and less businesses opening during those times which caused less fossil fuel combustion. When less fossil fuel is burned, less pollutants are created.
+
+- According to the 2018 World Air Quality Report, all of the countries reported had below 200 AQI based on their PM2.5 levels with Gurugram, India being the most polluted in 2018 with a PM2.5 concentration of 113.5 (µg/m³) which is 192 AQI (2).
+
+- Since the 2018 World Air Quality Report was measured in PM2.5 levels, I used the converter to convert the units to AQI (3).
+
+- Based on these two sources, I would predict the distribution of AQI for the entire world to be centered around 90 in the year 2018. This was calculated by taking the average of the minimum of each region and taking the average of the maximum of each region; then, taking the average of those two averages. 
+
+- Since the NASA report states that AQI, in terms of NO2 levels, has decreased since the start of the pandemic, I would predict the distribution of AQI for the entire world to be centered at about 70 in most recent years.
+
+- Because I’m not too confident in my estimate, I will set my prior $\alpha$ = 5 and $\mu$ = 70.
+
+- The Gamma distribution can be reparametrized as Gamma($\mu^2/\sigma^2$, $\mu/\sigma^2$). I use $\alpha$ and $\mu$ to calculate $\sigma^2$.
+
+# Libraries Needed
+```{r, warning=F, message=F}
+library(ggplot2)
+library(dplyr)
+library(MCMCpack)
+library(msm)
+library(psych)
+```
+
+# Loading Data and Data Cleaning
+```{r}
+df1 = read.csv("C:/Users/ddinh4/Documents/Fall 2023/EXST 7151/Final Project/Data/data_date.csv")
+unique_data <- df1 %>% distinct(Country, .keep_all = TRUE)
+aqi_2 <- unique_data[,c("Status","AQI_Value")]
+aqi <- aqi_2[,2]
+aqi <-  aqi[aqi <= 500]
+aqi_df <- data.frame(aqi)
+```
+
+# Summary Statistics of the Data
+
+```{r}
+sum.aqi = describe(aqi_df)
+knitr::kable(sum.aqi)
+```
+Notice that the data is positively skewed which is why I decided to use the Gamma distribution for my data initially.
+
+# Histogram of AQI
+
+```{r, warning=F}
+hist_aqi <- ggplot(aqi_df, aes(x = aqi)) + geom_histogram(aes(y = ..count..),
+breaks = seq(0, 550, by = 25), colour = "black",
+fill = "pink") +
+geom_density(aes(y = ..count.. * 25), color = "blue", linewidth = 1) +
+scale_x_continuous(breaks = seq(0,
+550, by = 50)) + theme_classic()
+
+hist_aqi
+```
+
+# Metropolis Within Gibbs Sampler
+
+Since the full conditionals of $\mu$ and $\sigma^2$ are not familiar distributions, need to use Metropolis algorithm within Gibbs.
+
+## First, Using Gamma for Distribution of Data
+
+Using the Gamma distribution for the data reparametrized in terms of $\mu$ and $\sigma^2$ with unknown $\mu$ and $\sigma^2$. Assuming $\mu$ and $\sigma^2$ independent, the joint prior distribution is p($\mu$, $\sigma^2$) = p($\mu$)p($\sigma^2$). Informative prior for $\mu$ ~ N(70, $70^2/5$) and vague prior for $\sigma^2$ ~ IG(0.1, 0.1). 
+```{r}
+a = 5
+log.posterior.mu <- function(mu,sigma2,mu0,tau2,y)
+  sum(dgamma(y, shape = (mu^2)/(sigma2), rate = mu/(sigma2), log=TRUE)) + dnorm(mu,mu0, sqrt(tau2),log=TRUE) 
+
+log.posterior.sigma2 <- function(sigma2,mu,alpha,beta,y) {
+  if (sigma2<0) return(-Inf) else
+    return(sum(dgamma(y, shape = (mu^2)/(sigma2), rate = mu/(sigma2), log=TRUE)) + log(dinvgamma(sigma2,alpha,beta)))
+}
+
+y <- aqi #data
+
+## prior hyperparameters
+mu0 <- 70
+tau2 <- (mu0^2)/a
+alpha <- 0.1
+beta <- 0.1
+
+
+sigma2 <- var(aqi) # initial value for sigma2
+mu<- mean(aqi) # initial value for mu 
+n.sim<-10000 ; mu.mcmc<-NULL ; sigma2.mcmc <- NULL; accept.mu <- 0;accept.sigma2 <- 0
+delta1 <- 65 ; ## normal proposal var for mu
+delta2 <- 700000 ## normal proposal var for sigma2
+
+for ( ite in 1 : n.sim) {
+  
+  mu.star<-rnorm(1, mu, sqrt(delta1))
+  
+  log.r <- log.posterior.mu(mu.star,sigma2,mu0,tau2,y) - log.posterior.mu(mu,sigma2,mu0,tau2,y)
+  
+  if (log(runif(1))< log.r) { 
+    mu <- mu.star 
+    accept.mu <- accept.mu+1
+  }
+  mu.mcmc<-c(mu.mcmc, mu)
+  
+  sigma2.star<-rnorm(1, sigma2, sqrt(delta2) )
+  
+  log.r <- log.posterior.sigma2(sigma2.star,mu,alpha,beta,y) - log.posterior.sigma2(sigma2,mu,alpha,beta,y)
+  
+  if (log(runif(1))< log.r) { 
+    sigma2 <- sigma2.star 
+    accept.sigma2 <- accept.sigma2+1
+  }
+  sigma2.mcmc<-c(sigma2.mcmc, sigma2)
+  
+  
+}
+
+par(mfrow=c(2,1))
+plot(mu.mcmc,type='l')
+plot(sigma2.mcmc,type='l')
+```
+
+```{r, echo=F}
+print(paste("Acceptance rate of mu =", accept.mu/n.sim))
+print(paste("Acceptance rate of sigma2 =", accept.sigma2/n.sim))
+
+print(paste("Mean of mu =" ,mean(mu.mcmc[1000:10000])))
+print(paste("Mean of sigma2 =", mean(sigma2.mcmc[1000:10000])))
+print(paste("Variance of mu =", var(mu.mcmc[1000:10000])))
+print(paste("Variance of sigma2 =", var(sigma2.mcmc[1000:10000])))
+
+```
+We can see that the Markov chain doesn't converge for sigma at all and is very unstable. Notice the tuning parameter of the normal proposal for $\sigma^2$ is very large.
+
+## Using Normal for Distribution of Data
+
+Keeping the priors for $\mu$ and $\sigma^2$ the same as before.
+```{r}
+log.posterior.mu <- function(mu,sigma2,mu0,tau2,y)
+  sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + dnorm(mu,mu0, sqrt(tau2),log=TRUE)
+
+log.posterior.sigma2 <- function(sigma2,mu,alpha,beta,y) {
+  if (sigma2<0) return(-Inf) else
+    return(sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + log(dinvgamma(sigma2,alpha,beta)))
+}
+
+y <- aqi #data
+
+## prior hyperparameters
+mu0 <- 70
+tau2 <- (70^2)/5
+alpha <- 0.1
+beta <- 0.1
+
+
+sigma2 <- var(aqi) # initial value for sigma2
+mu<- mean(aqi) # initial value for mu 
+n.sim<-10000 ; mu.mcmc<-NULL ; sigma2.mcmc <- NULL; accept.mu <- 0;accept.sigma2 <- 0
+delta1 <- 150 ; ## normal proposal var for mu
+delta2 <- 505000 ## normal proposal var for sigma2
+
+for ( ite in 1 : n.sim) {
+  
+  mu.star<-rnorm(1, mu, sqrt(delta1))
+  
+  log.r <- log.posterior.mu(mu.star,sigma2,mu0,tau2,y) - log.posterior.mu(mu,sigma2,mu0,tau2,y)
+  
+  if (log(runif(1))< log.r) { 
+    mu <- mu.star 
+    accept.mu <- accept.mu+1
+  }
+  mu.mcmc<-c(mu.mcmc, mu)
+  
+  sigma2.star<-rnorm(1, sigma2, sqrt(delta2) )
+  
+  log.r <- log.posterior.sigma2(sigma2.star,mu,alpha,beta,y) - log.posterior.sigma2(sigma2,mu,alpha,beta,y)
+  
+  if (log(runif(1))< log.r) { 
+    sigma2 <- sigma2.star 
+    accept.sigma2 <- accept.sigma2+1
+  }
+  sigma2.mcmc<-c(sigma2.mcmc, sigma2)
+  
+  
+}
+
+par(mfrow=c(2,1))
+plot(mu.mcmc,type='l')
+plot(sigma2.mcmc,type='l')
+```
+
+```{r, echo=FALSE}
+print(paste("Acceptance rate of mu =", accept.mu/n.sim))
+print(paste("Acceptance rate of sigma2 =", accept.sigma2/n.sim))
+
+print(paste("Mean of mu =" ,mean(mu.mcmc[2000:10000])))
+print(paste("Mean of sigma2 =", mean(sigma2.mcmc[2000:10000])))
+print(paste("Variance of mu =", var(mu.mcmc[2000:10000])))
+print(paste("Variance of sigma2 =", var(sigma2.mcmc[2000:10000])))
+
+```
+Using the normal distribution for the data, both of the parameters converged; however, the tuning parameter for both proposals are quite large especially for $\sigma^2$. 
+
+# Using the Normal for Distribution of the Data and Gamma for Prior of $\mu$
+
+Keeping prior of $\sigma^2$ the same as before.
+```{r}
+a=5
+log.posterior.mu <- function(mu,sigma2,mu0,tau2,y)
+  sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + dgamma(mu,a, a/mu0,log=TRUE)
+
+log.posterior.sigma2 <- function(sigma2,mu,alpha,beta,y) {
+  if (sigma2<0) return(-Inf) else
+    return(sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + log(dinvgamma(sigma2,alpha,beta)))
+}
+
+y <- aqi #data
+
+## prior hyperparameters
+mu0 <- 70
+tau2 <- (70^2)/5
+alpha <- 0.1
+beta <- 0.1
+
+
+sigma2 <- var(aqi) # initial value for sigma2
+mu<- mean(aqi) # initial value for mu 
+n.sim<-10000 ; mu.mcmc<-NULL ; sigma2.mcmc <- NULL; accept.mu <- 0;accept.sigma2 <- 0
+delta1 <- 130 ; ## normal proposal var for mu
+delta2 <- 600000 ## normal proposal var for sigma2
+
+for ( ite in 1 : n.sim) {
+  
+  mu.star<-rnorm(1, mu, sqrt(delta1))
+  
+  log.r <- log.posterior.mu(mu.star,sigma2,mu0,tau2,y) - log.posterior.mu(mu,sigma2,mu0,tau2,y)
+  
+  if (log(runif(1))< log.r) { 
+    mu <- mu.star 
+    accept.mu <- accept.mu+1
+  }
+  mu.mcmc<-c(mu.mcmc, mu)
+  
+  sigma2.star<-rnorm(1, sigma2, sqrt(delta2) )
+  
+  log.r <- log.posterior.sigma2(sigma2.star,mu,alpha,beta,y) - log.posterior.sigma2(sigma2,mu,alpha,beta,y)
+  
+  if (log(runif(1))< log.r) { 
+    sigma2 <- sigma2.star 
+    accept.sigma2 <- accept.sigma2+1
+  }
+  sigma2.mcmc<-c(sigma2.mcmc, sigma2)
+  
+  
+}
+
+par(mfrow=c(2,1))
+plot(mu.mcmc,type='l')
+plot(sigma2.mcmc,type='l')
+```
+
+```{r, echo=FALSE}
+print(paste("Acceptance rate of mu =", accept.mu/n.sim))
+print(paste("Acceptance rate of sigma2 =", accept.sigma2/n.sim))
+
+print(paste("Mean of mu =" ,mean(mu.mcmc[2000:10000])))
+print(paste("Mean of sigma2 =", mean(sigma2.mcmc[2000:10000])))
+print(paste("Variance of mu =", var(mu.mcmc[2000:10000])))
+print(paste("Variance of sigma2 =", var(sigma2.mcmc[2000:10000])))
+
+```
+Both chains for the parameters converges. The mean of $\mu$ and the mean of $\sigma^2$ is very similar to when using the normal prior distribution for $\mu$.Both tuning parameters are still very large.
+
+## Using Normal for Distrubtion of Data with Gamma Prior for $\mu$ and Gamma Prior for $\sigma^2$
+
+```{r}
+a=5
+log.posterior.mu <- function(mu,sigma2,mu0,tau2,y)
+  sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + dgamma(mu,a, a/mu0,log=TRUE)
+
+log.posterior.sigma2 <- function(sigma2,mu,alpha,beta,y) {
+  if (sigma2<0) return(-Inf) else
+    return(sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + log(dgamma(sigma2,alpha,beta)))
+}
+
+y <- aqi #data
+
+## prior hyperparameters
+mu0 <- 70
+tau2 <- (70^2)/5
+alpha <- 0.1
+beta <- 0.1
+
+
+sigma2 <- var(aqi) # initial value for sigma2
+mu<- mean(aqi) # initial value for mu 
+n.sim<-10000 ; mu.mcmc<-NULL ; sigma2.mcmc <- NULL; accept.mu <- 0;accept.sigma2 <- 0
+delta1 <- 60 ; ## normal proposal var for mu
+delta2 <- 30000 ## normal proposal var for sigma2
+
+for ( ite in 1 : n.sim) {
+  
+  mu.star<-rnorm(1, mu, sqrt(delta1))
+  
+  log.r <- log.posterior.mu(mu.star,sigma2,mu0,tau2,y) - log.posterior.mu(mu,sigma2,mu0,tau2,y)
+  
+  if (log(runif(1))< log.r) { 
+    mu <- mu.star 
+    accept.mu <- accept.mu+1
+  }
+  mu.mcmc<-c(mu.mcmc, mu)
+  
+  sigma2.star<-rnorm(1, sigma2, sqrt(delta2) )
+  
+  log.r <- log.posterior.sigma2(sigma2.star,mu,alpha,beta,y) - log.posterior.sigma2(sigma2,mu,alpha,beta,y)
+  
+  if (log(runif(1))< log.r) { 
+    sigma2 <- sigma2.star 
+    accept.sigma2 <- accept.sigma2+1
+  }
+  sigma2.mcmc<-c(sigma2.mcmc, sigma2)
+  
+  
+}
+
+par(mfrow=c(2,1))
+plot(mu.mcmc,type='l')
+plot(sigma2.mcmc,type='l')
+```
+
+```{r, echo=FALSE}
+print(paste("Acceptance rate of mu =", accept.mu/n.sim))
+print(paste("Acceptance rate of sigma2 =", accept.sigma2/n.sim))
+
+print(paste("Mean of mu =" ,mean(mu.mcmc[2000:10000])))
+print(paste("Mean of sigma2 =", mean(sigma2.mcmc[2000:10000])))
+print(paste("Variance of mu =", var(mu.mcmc[2000:10000])))
+print(paste("Variance of sigma2 =", var(sigma2.mcmc[2000:10000])))
+
+```
+Both chains for the parameters converges and the tuning parameters are as large as the previous models. The posterior estimates are also a bit more reasonable and aren't as large.
+
+# Metropolis-Hastings Within Gibbs Sampler
+
+Using the Normal distribution for the data and the Gamma for both the priors of $\mu$ and $\sigma^2$, the truncated normal from 0 to 500 was used as the proposal distribution for $\mu$ and truncated normal from 0 to $\infty$ for $\sigma^2$.
+
+```{r}
+a=5
+log.posterior.mu <- function(mu,sigma2,mu0,tau2,y)
+  sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + dgamma(mu,a, a/mu0,log=TRUE)
+
+log.posterior.sigma2 <- function(sigma2,mu,alpha,beta,y) {
+  if (sigma2<0) return(-Inf) else
+    return(sum(dnorm(y, mu, sqrt(sigma2), log=TRUE)) + log(dgamma(sigma2,alpha,beta)))
+}
+
+y <- aqi #data
+
+## prior hyperparameters
+mu0 <- 70
+tau2 <- (70^2)/5
+alpha <- 0.1
+beta <- 0.1
+
+
+sigma2 <- var(aqi) # initial value for sigma2
+mu<- mean(aqi) # initial value for mu 
+n.sim<-10000 ; mu.mcmc<-NULL ; sigma2.mcmc <- NULL; accept.mu <- 0;accept.sigma2 <- 0
+delta1 <- 60 ; ## normal proposal var for mu
+delta2 <- 30000 ## normal proposal var for sigma2
+
+for ( ite in 1 : n.sim) {
+  
+  mu.star<-rtnorm(1, mu, sqrt(delta1), 0, 500)
+  
+  log.r <- log.posterior.mu(mu.star,sigma2,mu0,tau2,y) + dtnorm(mu, mu.star, sqrt(delta1), 0,500, log = T) - log.posterior.mu(mu,sigma2,mu0,tau2,y) - dtnorm(mu.star, mu, sqrt(delta1), 0,500, log = T) 
+  
+  if (log(runif(1))< log.r) { 
+    mu <- mu.star 
+    accept.mu <- accept.mu+1
+  }
+  mu.mcmc<-c(mu.mcmc, mu)
+  
+  sigma2.star<-rtnorm(1, sigma2, sqrt(delta2),0, Inf)
+  
+  log.r <- log.posterior.sigma2(sigma2.star,mu,alpha,beta,y) + dtnorm(sigma2,sigma2.star,sqrt(delta2),0,Inf,log=T) - log.posterior.sigma2(sigma2,mu,alpha,beta,y) - dtnorm(sigma2.star,sigma2,sqrt(delta2),0,Inf,log=T)
+  
+  if (log(runif(1))< log.r) { 
+    sigma2 <- sigma2.star 
+    accept.sigma2 <- accept.sigma2+1
+  }
+  sigma2.mcmc<-c(sigma2.mcmc, sigma2)
+  
+  
+}
+
+par(mfrow=c(2,1))
+plot(mu.mcmc,type='l')
+plot(sigma2.mcmc,type='l')
+```
+
+```{r, echo=FALSE}
+print(paste("Acceptance rate of mu =", accept.mu/n.sim))
+print(paste("Acceptance rate of sigma2 =", accept.sigma2/n.sim))
+
+print(paste("Mean of mu =" ,mean(mu.mcmc[2000:10000])))
+print(paste("Mean of sigma2 =", mean(sigma2.mcmc[2000:10000])))
+print(paste("Variance of mu =", var(mu.mcmc[2000:10000])))
+print(paste("Variance of sigma2 =", var(sigma2.mcmc[2000:10000])))
+```
+
+The results are similar to the Metropolis within Gibbs using the normal proposal. 
+
+# Bayesian Hypothesis Testing
+
+Assuming $Y_i$ follows a normal distribution with unknown $\mu$ and $\sigma^2$,
+
+$H_0$: $\mu$ < 60
+
+$H_1$: $\mu$ $\ge$ 60
+
+Using Normal for Distribution of Data with Gamma Prior for $\mu$ and Gamma Prior for $\sigma^2$ and the normal proposal distribution. I chose 100 because that is the threshold for unsafe AQI for sensitive groups.
+
+## Computing Prior Odds
+
+```{r}
+prior.prob.h0 = pgamma(100, a, a/mu0)
+prior.prob.h1 = 1 - prior.prob.h0
+prior.odds = prior.prob.h0/prior.prob.h1
+```
+
+
+```{r, echo=FALSE}
+## Computing Posterior Odds
+
+#Using the example in notes to check if I'm integrating and calculating posterior odds correctly.
+
+p = function(y){
+  # Replace this with your actual pdf function
+  # For example, a normal distribution with mean 0 and standard deviation 1:
+  return(dnorm(y, mean = 175.79, sd = 0.93))
+}
+
+# Define the range over which you want to calculate the cdf
+lower_limit <- -Inf  # replace with your lower limit
+upper_limit <- 175     # replace with your upper limit
+
+# Use integrate to calculate the cdf
+cdf_result <- integrate(p, lower_limit, upper_limit)$value
+cdf_result/(1-cdf_result)
+
+cdf = pnorm(175, mean = 175.79, sd = 0.93)
+
+print(paste("Comparing the CDF using pnorm and integrating:", cdf,cdf_result))
+```
+
+```{r, echo=FALSE}
+### Trying to integrate and calculate posterior odds for this dataset. I had to normalize to get the proportion of AQI less than 100. **Integration didn't make sense :(**
+
+post.density = function(x){
+   return(sum(dnorm(x, mu, sqrt(sigma2), log=TRUE)) + dgamma(x,a, a/mu0,log=TRUE))
+} 
+
+post.prob.h0 = integrate(post.density, 0, 100)$value
+normalize <- integrate(post.density, 0, 500)$value
+post.prob.h0 = post.prob.h0/normalize
+post.prob.h1 = 1-post.prob.h0
+
+post.odds = post.prob.h0/post.prob.h1
+```
+
+```{r}
+mu0 = 70
+tau2 = (mu0^2)/5
+mu = mean(mu.mcmc[2000:10000])
+sigma2 = var(sigma2.mcmc[2000:10000])
+mu_mcmc=mu.mcmc[2000:10000]
+po.h0=sum(mu_mcmc < 60)/length(mu_mcmc)
+po.h1 = 1-po.h0
+po.odds = po.h0/po.h1
+
+range(mu_mcmc)
+```
+
+## Computing Bayes Factor
+
+```{r}
+BF = po.odds/prior.odds
+```
+
+Since the BF = `r BF` is less than 1, we can conclude the data supports the alternative hypothesis that $\mu$ is greater than 60 AQI with P($\mu$>60|y) = `r po.h1`. This is not a good sign because there's strong evidence that shows AQI is increasing from the "good" AQI level. The BF in favor of the alternative is `r 1/BF` which is greater than 20 and suggest there is strong evidence supporting the alternative.
+
+With using the Gamma distribution for my likelihood, a normal prior for mu and inverse gamma prior for sigma, the result came out with be similar to using a normal likelihood with gamma prior for mu and sigma2 (results above). The BF came out to be 0.0244 in favor of the null and 40.904 in favor of the alternative. The probability of P($\mu$>60|y) = 88.65% which is relatively high.
+
